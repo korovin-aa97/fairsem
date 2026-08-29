@@ -25,4 +25,9 @@ Environment variables:
 
 This first draft targets Linux and requires `flock`. It has not been tested.
 
+## Agent handoff
+
+Start a future implementation or publication session with [AGENTS.md](AGENTS.md),
+then follow [the public release plan](docs/PUBLIC_RELEASE_PLAN.md).
+
 No public license has been selected while this repository is private.
