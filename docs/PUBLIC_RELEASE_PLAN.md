@@ -1,6 +1,6 @@
 # FairSem — Public Release Plan
 
-Status: `v0.1.2` release completed 2026-08-30. This remains the maintenance and
+Status: `v0.1.3` release completed 2026-08-30. This remains the maintenance and
 future-release checklist.
 
 ## Release thesis

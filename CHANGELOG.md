@@ -2,6 +2,13 @@
 
 All notable changes are documented here. FairSem follows Semantic Versioning.
 
+## [0.1.3] — 2026-08-30
+
+- Publish the release under repository-enforced immutable releases, locking
+  its tag and uploaded assets and generating GitHub release attestation.
+- Keep the v0.1.2 accessible README hero and the v0.1.1 runtime correctness
+  fixes unchanged.
+
 ## [0.1.2] — 2026-08-30
 
 - Add an accessible illustrated README hero showing how many local jobs flow
@@ -34,3 +41,4 @@ All notable changes are documented here. FairSem follows Semantic Versioning.
 [0.1.0]: https://github.com/korovin-aa97/fairsem/releases/tag/v0.1.0
 [0.1.1]: https://github.com/korovin-aa97/fairsem/releases/tag/v0.1.1
 [0.1.2]: https://github.com/korovin-aa97/fairsem/releases/tag/v0.1.2
+[0.1.3]: https://github.com/korovin-aa97/fairsem/releases/tag/v0.1.3

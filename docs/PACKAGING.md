@@ -6,7 +6,7 @@ which is sufficient for downstream distro packages.
 
 ## Homebrew/Linuxbrew candidate
 
-[`Formula/fairsem.rb`](../Formula/fairsem.rb) is pinned to the exact v0.1.2
+[`Formula/fairsem.rb`](../Formula/fairsem.rb) is pinned to the exact v0.1.3
 release archive and checksum. After the public release exists, validate it on
 a Linuxbrew host. Current Homebrew audits formulae by tap-qualified name, so
 use a disposable local tap rather than auditing the file path directly:

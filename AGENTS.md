@@ -1,6 +1,6 @@
 # FairSem — Agent Bootstrap
 
-Last updated: 2026-08-30. Repository status: **public v0.1.2 utility**.
+Last updated: 2026-08-30. Repository status: **public v0.1.3 utility**.
 
 Read this file first, then `README.md`, `bin/fairsem`, and
 `docs/PUBLIC_RELEASE_PLAN.md`.
@@ -19,7 +19,7 @@ priority.
 
 ## Current state
 
-- Public Linux/Python 3.10+ `v0.1.2`, licensed under MIT.
+- Public Linux/Python 3.10+ `v0.1.3`, licensed under MIT.
 - `bin/fairsem` provides named owner-scoped semaphores, verified FIFO
   eligibility, timeouts, signal forwarding, PID-start stale recovery, and
   stable human/JSON status.

@@ -9,7 +9,7 @@ import io
 import tarfile
 from pathlib import Path
 
-VERSION = "0.1.2"
+VERSION = "0.1.3"
 ROOT = Path(__file__).resolve().parents[1]
 DIST = ROOT / "dist"
 ARCHIVE = DIST / f"fairsem-v{VERSION}.tar.gz"
@@ -19,6 +19,7 @@ FILES = [
     "man/fairsem.1",
     "docs/CONTRACT.md",
     "docs/COMPETITORS.md",
+    "docs/RELEASE_NOTES_v0.1.3.md",
     "docs/RELEASE_NOTES_v0.1.2.md",
     "docs/RELEASE_NOTES_v0.1.1.md",
     "docs/assets/social-preview.png",
