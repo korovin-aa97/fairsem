@@ -1,0 +1,33 @@
+name: Bug report
+description: Report a reproducible FairSem problem
+title: "[bug] "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Please do not disclose vulnerabilities here; use the private security form.
+  - type: input
+    id: version
+    attributes:
+      label: FairSem version
+      placeholder: fairsem 0.1.0
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Linux distribution and Python version
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected and actual behavior
+    validations:
+      required: true

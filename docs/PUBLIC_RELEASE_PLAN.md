@@ -1,6 +1,7 @@
 # FairSem — Public Release Plan
 
-Status: private Linux draft. Target: a small, dependable `v0.1.0` utility.
+Status: `v0.1.0` release completed 2026-08-29. This remains the maintenance and
+future-release checklist.
 
 ## Release thesis
 

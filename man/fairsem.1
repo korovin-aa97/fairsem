@@ -1,0 +1,75 @@
+.TH FAIRSEM 1 "2026-08-29" "fairsem 0.1.0" "User Commands"
+.SH NAME
+fairsem \- fair, observable admission semaphore for local Linux commands
+.SH SYNOPSIS
+.B fairsem run
+[\fB--name\fR NAME] [\fB--slots\fR N] [\fB--timeout\fR SECONDS]
+[\fB--poll\fR SECONDS] [\fB--best-effort\fR] \fB--\fR COMMAND [ARG...]
+.br
+.B fairsem status
+[\fB--name\fR NAME] [\fB--json\fR]
+.br
+.B fairsem repair
+[\fB--name\fR NAME]
+.SH DESCRIPTION
+FairSem gives independent processes owned by one user a named, local admission
+queue. It assigns tickets under an exclusive kernel lock and admits the oldest
+eligible live waiters without exceeding the configured slot count.
+.PP
+Version 0.1 supports Linux with /proc and Python 3.10 or newer. FairSem is not a
+distributed lock, scheduler, resource limiter, or security boundary between
+processes sharing a Unix account.
+.SH OPTIONS
+.TP
+.B --name NAME
+Semaphore name. Default: default. Names use letters, digits, dot, underscore,
+and hyphen; the first character must be alphanumeric.
+.TP
+.B --slots N
+Positive slot count. Default: 1. A conflicting count is rejected while a named
+semaphore is active and may replace its configuration when idle.
+.TP
+.B --timeout SECONDS
+Maximum monotonic time to wait. Exit 75 without launching on expiry.
+.TP
+.B --poll SECONDS
+Admission polling interval. Default: 0.05.
+.TP
+.B --best-effort
+If secure initial state setup/locking is unavailable, print a warning and run
+without admission. Corrupt state and configuration conflicts remain errors.
+.TP
+.B --json
+Emit the stable status JSON schema instead of human text.
+.SH ENVIRONMENT
+.TP
+.B FAIRSEM_STATE_DIR
+Owner-only state root. Default: /tmp/fairsem-$UID. Must be a real directory
+owned by the effective user with mode 0700.
+.TP
+.B FAIRSEM_HELD_NAMES
+Internal colon-separated nesting guard passed to child commands. Users should
+not set it directly.
+.SH FAIRNESS
+With one slot, admission is FIFO among live waiters. With N slots, only the
+oldest available-capacity group is eligible, allowing at most N-1 scheduling
+overtakes. Priorities are intentionally absent in 0.1.
+.SH SIGNALS AND CRASHES
+INT, TERM, and HUP are forwarded to the command's new process group. A command
+remains the recorded holder if its wrapper is killed, and dead/zombie records
+are removed by the next operation using PID plus /proc start-time identity.
+.SH EXIT STATUS
+Command status is preserved. Pre-launch tool codes are: 64 usage, 65 config,
+69 unsupported platform, 70 corrupt state, 73 unsafe/unavailable state or lock,
+75 timeout, and 126 cannot execute. Signal exits use 128 plus signal.
+.SH SECURITY
+Status and owner-readable state contain command arguments. Do not put secrets
+on command lines. Default behavior fails closed when state cannot be trusted.
+.SH FILES
+.TP
+.B /tmp/fairsem-$UID
+Default state root.
+.SH SEE ALSO
+flock(2), proc(5)
+.SH BUGS
+Report issues at https://github.com/korovin-aa97/fairsem/issues

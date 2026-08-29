@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04]
+        python: ["3.10", "3.11", "3.12", "3.13"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Compile
+        run: python -m py_compile bin/fairsem tests/test_fairsem.py tests/helpers/*.py scripts/build_release.py
+      - name: Test
+        run: python -m unittest -v tests.test_fairsem
+
+  package:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Shellcheck
+        run: shellcheck install.sh uninstall.sh scripts/rehearse_release.sh
+      - name: Build twice reproducibly
+        run: |
+          python3 scripts/build_release.py
+          cp dist/fairsem-v0.1.0.tar.gz /tmp/first.tar.gz
+          python3 scripts/build_release.py
+          cmp /tmp/first.tar.gz dist/fairsem-v0.1.0.tar.gz
+          (cd dist && sha256sum --check SHA256SUMS)
+      - name: Rehearse archive install and uninstall
+        run: ./scripts/rehearse_release.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fairsem-v0.1.0-linux
+          path: |
+            dist/fairsem-v0.1.0.tar.gz
+            dist/SHA256SUMS

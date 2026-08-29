@@ -1,6 +1,6 @@
 # FairSem — Agent Bootstrap
 
-Last updated: 2026-08-29. Repository status: **private extraction draft**.
+Last updated: 2026-08-29. Repository status: **public v0.1.0 utility**.
 
 Read this file first, then `README.md`, `bin/fairsem`, and
 `docs/PUBLIC_RELEASE_PLAN.md`.
@@ -19,12 +19,15 @@ priority.
 
 ## Current state
 
-- Private, unpublished Linux/bash draft.
-- `bin/fairsem` supports named semaphores, a slot count, FIFO-like ticket order,
-  stale-PID cleanup, status output, and command execution under a slot.
-- It requires `flock` and stores state under `/tmp` by default.
-- It has no tests, version command, install script, package, license, timeout,
-  priority/aging contract, JSON status, or portability guarantees.
+- Public Linux/Python 3.10+ `v0.1.0`, licensed under MIT.
+- `bin/fairsem` provides named owner-scoped semaphores, verified FIFO
+  eligibility, timeouts, signal forwarding, PID-start stale recovery, and
+  stable human/JSON status.
+- State uses Python's `flock(2)` binding and lives in owner-only
+  `/tmp/fairsem-$UID` by default.
+- Tests cover concurrency, progress, crash/signal cleanup, fail-closed paths,
+  independent names, nesting, and command status propagation across the
+  supported Python/Linux matrix.
 
 ## Non-negotiable boundaries
 
@@ -41,15 +44,13 @@ priority.
 
 ## Next work, in order
 
-1. Write the state, fairness, failure, and cleanup contract.
-2. Add deterministic concurrency tests for admission order, slot limits,
-   crashes, signals, stale PIDs, and competing semaphore names.
-3. Add timeout/cancellation, priority with aging, JSON status, and stable exit
-   codes without weakening fairness.
-4. Decide whether v0.1 stays bash/Linux or moves to a portable implementation.
-5. Add install/uninstall paths, man page or shell help, and release archives.
-6. Validate on at least one unrelated machine with no repository-specific edits.
-7. Complete `docs/PUBLIC_RELEASE_PLAN.md`; publish only with explicit approval.
+1. Collect real user reports before expanding the feature set.
+2. Keep every scheduling/state change covered by deterministic tests.
+3. Consider a more event-driven wakeup only with equivalent failure behavior.
+4. Consider priorities only with a specified and adversarially tested aging
+   rule; FIFO progress is more important than feature count.
+5. Add package-manager distribution only where it can be maintained.
+6. Do not claim macOS or distributed support without a new contract and matrix.
 
 ## v0.1 definition of done
 
@@ -83,5 +84,5 @@ case; otherwise keep it as a compact maintained utility.
 ## Release authority
 
 Agents can prepare code, validation, documentation, archives, package recipes,
-and launch drafts. Making the repository public, publishing packages, creating
-a public release, or posting externally requires explicit owner authorization.
+and launch drafts. New releases, package publication, visibility changes, or
+external launch posts still require explicit owner authorization.

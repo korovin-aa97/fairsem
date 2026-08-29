@@ -1,0 +1,18 @@
+name: Use case or feature
+description: Describe a shared-resource problem FairSem could solve
+title: "[use case] "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: use-case
+    attributes:
+      label: Shared-resource use case
+      description: What competes, on what Linux machine, and why a normal semaphore is insufficient?
+    validations:
+      required: true
+  - type: textarea
+    id: boundary
+    attributes:
+      label: Smallest useful change
+    validations:
+      required: true

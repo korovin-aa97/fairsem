@@ -1,174 +1,719 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/usr/bin/env python3
+"""FairSem: a fair, observable local semaphore for Linux commands."""
 
-STATE_ROOT="${FAIRSEM_STATE_DIR:-/tmp/fairsem-${UID}}"
-POLL_SECONDS="${FAIRSEM_POLL_SECONDS:-1}"
+from __future__ import annotations
 
-usage() {
-  command cat >&2 <<'EOF'
-Usage:
-  fairsem run [--name NAME] [--slots N] -- COMMAND [ARG...]
-  fairsem status [--name NAME]
+import argparse
+import fcntl
+import json
+import os
+import re
+import secrets
+import shlex
+import signal
+import stat
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+from contextlib import contextmanager
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Iterator, NoReturn, Sequence
 
-Draft Linux implementation. Requires flock.
-EOF
-  exit 64
-}
 
-die() {
-  echo "fairsem: $*" >&2
-  exit 65
-}
+VERSION = "0.1.0"
+NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+SCHEMA_VERSION = 1
 
-valid_name() {
-  [[ "$1" =~ ^[A-Za-z0-9._-]+$ ]]
-}
+EX_USAGE = 64
+EX_CONFIG = 65
+EX_UNAVAILABLE = 69
+EX_STATE = 70
+EX_CANTCREAT = 73
+EX_TIMEOUT = 75
+EX_EXEC = 126
 
-state_dir() {
-  printf '%s/%s' "$STATE_ROOT" "$1"
-}
+GATED_EXEC = """\
+import os, sys
+gate = int(sys.argv[1])
+allowed = os.read(gate, 1)
+os.close(gate)
+if allowed != b"1":
+    raise SystemExit(125)
+try:
+    os.execvpe(sys.argv[2], sys.argv[2:], os.environ)
+except OSError as exc:
+    print(f"fairsem: cannot execute {sys.argv[2]!r}: {exc.strerror}", file=sys.stderr)
+    raise SystemExit(126)
+"""
 
-with_lock() {
-  local name="$1"
-  shift
-  local directory
-  directory="$(state_dir "$name")"
-  mkdir -p "$directory/waiters" "$directory/holders"
-  (
-    flock -x 9
-    "$@" "$directory"
-  ) 9>"$directory/lock"
-}
 
-clean_stale_locked() {
-  local directory="$1"
-  local file pid
-  for file in "$directory"/waiters/* "$directory"/holders/*; do
-    [[ -e "$file" ]] || continue
-    pid="$(cut -d' ' -f1 "$file" 2>/dev/null || true)"
-    if [[ -z "$pid" ]] || ! kill -0 "$pid" 2>/dev/null; then
-      rm -f -- "$file"
-    fi
-  done
-}
+class FairSemError(Exception):
+    def __init__(self, message: str, exit_code: int = EX_STATE) -> None:
+        super().__init__(message)
+        self.exit_code = exit_code
 
-register_locked() {
-  local ticket="$1"
-  local command_text="$2"
-  local directory="$3"
-  clean_stale_locked "$directory"
-  printf '%s %s\n' "$$" "$command_text" >"$directory/waiters/$ticket"
-}
 
-try_acquire_locked() {
-  local ticket="$1"
-  local slots="$2"
-  local directory="$3"
-  clean_stale_locked "$directory"
-  local holder_count first_waiter
-  holder_count="$(find "$directory/holders" -type f -maxdepth 1 2>/dev/null | wc -l | tr -d ' ')"
-  first_waiter="$(find "$directory/waiters" -type f -maxdepth 1 -print 2>/dev/null | sort | head -n 1)"
-  if (( holder_count < slots )) && [[ "$first_waiter" == "$directory/waiters/$ticket" ]]; then
-    mv "$directory/waiters/$ticket" "$directory/holders/$ticket"
+class StateUnavailable(FairSemError):
+    pass
+
+
+def eprint(message: str) -> None:
+    print(f"fairsem: {message}", file=sys.stderr)
+
+
+def linux_process_info(pid: int) -> tuple[str, str] | None:
+    """Return Linux /proc process state and start-time identity, or None."""
+    try:
+        raw = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
+        # comm may contain spaces and parentheses. Fields after the last ')' start
+        # at process state (field 3); starttime is field 22, hence index 19.
+        tail = raw[raw.rfind(")") + 2 :].split()
+        return tail[0], tail[19]
+    except (OSError, IndexError, ValueError):
+        return None
+
+
+def linux_process_start(pid: int) -> str | None:
+    info = linux_process_info(pid)
+    return None if info is None else info[1]
+
+
+def process_identity(pid: int) -> dict[str, Any] | None:
+    started = linux_process_start(pid)
+    if started is None:
+        return None
+    return {"pid": pid, "start_ticks": started}
+
+
+def identity_alive(identity: Any) -> bool:
+    if not isinstance(identity, dict):
+        return False
+    pid = identity.get("pid")
+    started = identity.get("start_ticks")
+    info = linux_process_info(pid) if isinstance(pid, int) and pid > 0 else None
+    return (
+        isinstance(pid, int)
+        and pid > 0
+        and isinstance(started, str)
+        and info is not None
+        and info[0] != "Z"
+        and info[1] == started
+    )
+
+
+def monotonic_ns() -> int:
+    return time.monotonic_ns()
+
+
+def wall_time() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def validate_secure_directory(path: Path, *, create: bool) -> None:
+    try:
+        if create:
+            path.mkdir(mode=0o700, parents=True, exist_ok=True)
+        details = path.lstat()
+    except OSError as exc:
+        raise StateUnavailable(
+            f"cannot access state directory {path}: {exc.strerror}", EX_CANTCREAT
+        ) from exc
+    if stat.S_ISLNK(details.st_mode) or not stat.S_ISDIR(details.st_mode):
+        raise StateUnavailable(f"state path is not a real directory: {path}", EX_CANTCREAT)
+    if details.st_uid != os.geteuid():
+        raise StateUnavailable(f"state directory is not owned by uid {os.geteuid()}: {path}", EX_CANTCREAT)
+    if stat.S_IMODE(details.st_mode) & 0o077:
+        raise StateUnavailable(f"state directory permissions must be 0700: {path}", EX_CANTCREAT)
+
+
+def atomic_json(path: Path, value: Any) -> None:
+    payload = (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode()
+    temp_name: Path | None = None
+    try:
+        fd, raw_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+        temp_name = Path(raw_name)
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_name, path)
+        temp_name = None
+    except OSError as exc:
+        raise StateUnavailable(f"cannot write state file {path}: {exc.strerror}", EX_STATE) from exc
+    finally:
+        if temp_name is not None:
+            try:
+                temp_name.unlink()
+            except OSError:
+                pass
+
+
+def read_json(path: Path) -> Any:
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            return json.load(handle)
+    except (OSError, json.JSONDecodeError) as exc:
+        raise FairSemError(f"corrupt or unreadable state file: {path}", EX_STATE) from exc
+
+
+def valid_identity_shape(identity: Any) -> bool:
+    return (
+        isinstance(identity, dict)
+        and isinstance(identity.get("pid"), int)
+        and not isinstance(identity.get("pid"), bool)
+        and identity["pid"] > 0
+        and isinstance(identity.get("start_ticks"), str)
+        and identity["start_ticks"].isdigit()
+    )
+
+
+def validate_record(record: Any, path: Path) -> dict[str, Any]:
+    valid = (
+        isinstance(record, dict)
+        and record.get("schema") == SCHEMA_VERSION
+        and isinstance(record.get("ticket"), str)
+        and f"{record.get('ticket')}.json" == path.name
+        and valid_identity_shape(record.get("owner"))
+        and (record.get("command") is None or valid_identity_shape(record.get("command")))
+        and isinstance(record.get("argv"), list)
+        and all(isinstance(item, str) for item in record.get("argv", []))
+        and isinstance(record.get("enqueued_monotonic_ns"), int)
+        and not isinstance(record.get("enqueued_monotonic_ns"), bool)
+        and record["enqueued_monotonic_ns"] >= 0
+        and isinstance(record.get("enqueued_at"), str)
+    )
+    if not valid:
+        raise FairSemError(f"invalid record schema: {path}", EX_STATE)
+    return record
+
+
+@dataclass
+class CleanupResult:
+    removed_waiters: int = 0
+    removed_holders: int = 0
+
+
+class SemaphoreState:
+    def __init__(self, root: Path, name: str) -> None:
+        self.root = root
+        self.name = name
+        self.directory = root / name
+        self.waiters = self.directory / "waiters"
+        self.holders = self.directory / "holders"
+        self.quarantine = self.directory / "quarantine"
+        self.lock_path = self.directory / "lock"
+        self.config_path = self.directory / "config.json"
+        self.counter_path = self.directory / "counter"
+
+    def prepare(self) -> None:
+        validate_secure_directory(self.root, create=True)
+        for directory in (self.directory, self.waiters, self.holders, self.quarantine):
+            validate_secure_directory(directory, create=True)
+
+    @contextmanager
+    def locked(self) -> Iterator[None]:
+        self.prepare()
+        flags = os.O_CREAT | os.O_RDWR
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        fd: int | None = None
+        try:
+            fd = os.open(self.lock_path, flags, 0o600)
+            details = os.fstat(fd)
+            if not stat.S_ISREG(details.st_mode) or details.st_uid != os.geteuid():
+                os.close(fd)
+                fd = None
+                raise StateUnavailable(f"unsafe lock file: {self.lock_path}", EX_CANTCREAT)
+            if stat.S_IMODE(details.st_mode) & 0o077:
+                os.close(fd)
+                fd = None
+                raise StateUnavailable(f"lock file permissions must be 0600: {self.lock_path}", EX_CANTCREAT)
+            fcntl.flock(fd, fcntl.LOCK_EX)
+        except OSError as exc:
+            if fd is not None:
+                os.close(fd)
+            raise StateUnavailable(f"cannot lock {self.lock_path}: {exc.strerror}", EX_CANTCREAT) from exc
+        try:
+            yield
+        finally:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            finally:
+                os.close(fd)
+
+    def _record_files(self, kind: str) -> list[Path]:
+        directory = self.waiters if kind == "waiters" else self.holders
+        try:
+            return sorted((item for item in directory.iterdir() if item.is_file()), key=lambda p: p.name)
+        except OSError as exc:
+            raise FairSemError(f"cannot read {kind} state: {exc.strerror}", EX_STATE) from exc
+
+    def cleanup_stale_locked(self) -> CleanupResult:
+        result = CleanupResult()
+        for kind in ("waiters", "holders"):
+            for path in self._record_files(kind):
+                record = validate_record(read_json(path), path)
+                identity = record.get("owner")
+                if kind == "holders" and record.get("command") is not None:
+                    identity = record.get("command")
+                if not identity_alive(identity):
+                    try:
+                        path.unlink()
+                    except OSError as exc:
+                        raise FairSemError(f"cannot remove stale record {path}: {exc.strerror}", EX_STATE) from exc
+                    if kind == "waiters":
+                        result.removed_waiters += 1
+                    else:
+                        result.removed_holders += 1
+        return result
+
+    def repair_locked(self) -> list[str]:
+        moved: list[str] = []
+        for kind in ("waiters", "holders"):
+            for path in self._record_files(kind):
+                try:
+                    validate_record(read_json(path), path)
+                    valid = True
+                except FairSemError:
+                    valid = False
+                if valid:
+                    continue
+                destination = self.quarantine / f"{kind}-{path.name}-{secrets.token_hex(4)}"
+                try:
+                    os.replace(path, destination)
+                except OSError as exc:
+                    raise FairSemError(f"cannot quarantine {path}: {exc.strerror}", EX_STATE) from exc
+                moved.append(str(destination))
+        self.cleanup_stale_locked()
+        return moved
+
+    def read_config_locked(self) -> dict[str, Any] | None:
+        if not self.config_path.exists():
+            return None
+        config = read_json(self.config_path)
+        if (
+            not isinstance(config, dict)
+            or config.get("schema") != SCHEMA_VERSION
+            or not isinstance(config.get("slots"), int)
+            or isinstance(config.get("slots"), bool)
+            or config["slots"] < 1
+        ):
+            raise FairSemError(f"invalid semaphore config: {self.config_path}", EX_STATE)
+        return config
+
+    def configure_locked(self, slots: int) -> None:
+        config = self.read_config_locked()
+        if config is None:
+            atomic_json(self.config_path, {"schema": SCHEMA_VERSION, "slots": slots})
+            return
+        if config["slots"] == slots:
+            return
+        if self._record_files("waiters") or self._record_files("holders"):
+            raise FairSemError(
+                f"semaphore {self.name!r} already uses {config['slots']} slots; wait until idle to change it",
+                EX_CONFIG,
+            )
+        atomic_json(self.config_path, {"schema": SCHEMA_VERSION, "slots": slots})
+
+    def next_ticket_locked(self) -> str:
+        counter = 0
+        if self.counter_path.exists():
+            try:
+                counter = int(self.counter_path.read_text(encoding="ascii").strip())
+            except (OSError, ValueError) as exc:
+                raise FairSemError(f"invalid ticket counter: {self.counter_path}", EX_STATE) from exc
+            if counter < 0 or counter >= 10**20 - 1:
+                raise FairSemError(f"ticket counter is outside its supported range: {self.counter_path}", EX_STATE)
+        counter += 1
+        try:
+            temp = self.counter_path.with_name(f".counter.{os.getpid()}.{secrets.token_hex(4)}")
+            temp.write_text(f"{counter}\n", encoding="ascii")
+            os.chmod(temp, 0o600)
+            os.replace(temp, self.counter_path)
+        except OSError as exc:
+            raise FairSemError(f"cannot update ticket counter: {exc.strerror}", EX_STATE) from exc
+        return f"{counter:020d}-{secrets.token_hex(6)}"
+
+    def register_locked(self, command: Sequence[str], slots: int) -> str:
+        self.cleanup_stale_locked()
+        self.configure_locked(slots)
+        ticket = self.next_ticket_locked()
+        owner = process_identity(os.getpid())
+        if owner is None:
+            raise FairSemError("cannot read this process identity from /proc", EX_UNAVAILABLE)
+        atomic_json(
+            self.waiters / f"{ticket}.json",
+            {
+                "schema": SCHEMA_VERSION,
+                "ticket": ticket,
+                "owner": owner,
+                "argv": list(command),
+                "command": None,
+                "enqueued_monotonic_ns": monotonic_ns(),
+                "enqueued_at": wall_time(),
+            },
+        )
+        return ticket
+
+    def try_acquire_locked(self, ticket: str) -> bool:
+        self.cleanup_stale_locked()
+        config = self.read_config_locked()
+        if config is None:
+            raise FairSemError("semaphore config disappeared", EX_STATE)
+        waiter_files = self._record_files("waiters")
+        holder_files = self._record_files("holders")
+        candidate = self.waiters / f"{ticket}.json"
+        if not candidate.exists():
+            raise FairSemError("waiter record disappeared", EX_STATE)
+        available = max(0, config["slots"] - len(holder_files))
+        eligible = waiter_files[:available]
+        if candidate not in eligible:
+            return False
+        record = validate_record(read_json(candidate), candidate)
+        record["admitted_monotonic_ns"] = monotonic_ns()
+        record["admitted_at"] = wall_time()
+        record["command"] = None
+        atomic_json(candidate, record)
+        os.replace(candidate, self.holders / candidate.name)
+        return True
+
+    def set_command_locked(self, ticket: str, command_pid: int) -> None:
+        path = self.holders / f"{ticket}.json"
+        record = validate_record(read_json(path), path)
+        identity = process_identity(command_pid)
+        if identity is None:
+            raise FairSemError("cannot read command process identity from /proc", EX_STATE)
+        record["command"] = identity
+        atomic_json(path, record)
+
+    def release_locked(self, ticket: str) -> None:
+        for path in (self.waiters / f"{ticket}.json", self.holders / f"{ticket}.json"):
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                pass
+            except OSError as exc:
+                raise FairSemError(f"cannot release ticket {ticket}: {exc.strerror}", EX_STATE) from exc
+
+    def snapshot_locked(self) -> tuple[dict[str, Any], CleanupResult]:
+        cleanup = self.cleanup_stale_locked()
+        config = self.read_config_locked()
+        now = monotonic_ns()
+
+        def normalized(kind: str) -> list[dict[str, Any]]:
+            values: list[dict[str, Any]] = []
+            for path in self._record_files(kind):
+                record = validate_record(read_json(path), path)
+                argv = record.get("argv")
+                if argv is None:
+                    argv = record.get("requested_command", [])
+                enqueued = record.get("enqueued_monotonic_ns")
+                wait_ms = (now - enqueued) // 1_000_000 if isinstance(enqueued, int) and 0 <= enqueued <= now else None
+                values.append(
+                    {
+                        "ticket": record.get("ticket"),
+                        "pid": (record.get("owner") or {}).get("pid"),
+                        "command_pid": (record.get("command") or {}).get("pid"),
+                        "argv": argv,
+                        "enqueued_at": record.get("enqueued_at"),
+                        "wait_ms": wait_ms,
+                    }
+                )
+            return values
+
+        holders = normalized("holders")
+        waiters = normalized("waiters")
+        return (
+            {
+                "schema": SCHEMA_VERSION,
+                "name": self.name,
+                "slots": None if config is None else config["slots"],
+                "in_use": len(holders),
+                "available": None if config is None else max(0, config["slots"] - len(holders)),
+                "holders": holders,
+                "waiters": waiters,
+            },
+            cleanup,
+        )
+
+
+def validate_platform() -> None:
+    if not sys.platform.startswith("linux") or not Path("/proc/self/stat").exists():
+        raise FairSemError("v0.1 supports Linux with /proc only", EX_UNAVAILABLE)
+
+
+def parse_nonnegative_float(value: str) -> float:
+    try:
+        parsed = float(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("must be a number") from exc
+    if parsed < 0 or parsed == float("inf") or parsed != parsed:
+        raise argparse.ArgumentTypeError("must be a finite non-negative number")
+    return parsed
+
+
+def parse_positive_int(value: str) -> int:
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("must be an integer") from exc
+    if parsed < 1:
+        raise argparse.ArgumentTypeError("must be at least 1")
+    return parsed
+
+
+def validate_name(name: str) -> None:
+    if not NAME_RE.fullmatch(name):
+        raise FairSemError("name must match [A-Za-z0-9][A-Za-z0-9._-]{0,63}", EX_CONFIG)
+
+
+def root_path() -> Path:
+    configured = os.environ.get("FAIRSEM_STATE_DIR")
+    if configured:
+        return Path(configured).absolute()
+    return Path(f"/tmp/fairsem-{os.geteuid()}")
+
+
+def best_effort(command: Sequence[str], reason: FairSemError) -> int:
+    eprint(f"WARNING: semaphore unavailable; --best-effort is running without a slot: {reason}")
+    try:
+        completed = subprocess.run(list(command), check=False)
+    except OSError as exc:
+        eprint(f"cannot execute {command[0]!r}: {exc.strerror}")
+        return EX_EXEC
+    return completed.returncode if completed.returncode >= 0 else 128 - completed.returncode
+
+
+def run_command(args: argparse.Namespace) -> int:
+    validate_platform()
+    validate_name(args.name)
+    if not args.command:
+        raise FairSemError("run requires a command after --", EX_USAGE)
+    command = args.command[1:] if args.command[0] == "--" else args.command
+    if not command:
+        raise FairSemError("run requires a command after --", EX_USAGE)
+    held = {item for item in os.environ.get("FAIRSEM_HELD_NAMES", "").split(":") if item}
+    if args.name in held:
+        raise FairSemError(f"nested acquisition of semaphore {args.name!r} would deadlock", EX_CONFIG)
+
+    state = SemaphoreState(root_path(), args.name)
+    ticket: str | None = None
+    acquired = False
+    child: subprocess.Popen[Any] | None = None
+    received_signal: int | None = None
+    wake = threading.Event()
+
+    def on_signal(signum: int, _frame: Any) -> None:
+        nonlocal received_signal
+        received_signal = signum
+        if child is not None:
+            try:
+                os.killpg(child.pid, signum)
+            except ProcessLookupError:
+                pass
+        wake.set()
+
+    previous_handlers: dict[int, Any] = {}
+    for signum in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+        previous_handlers[signum] = signal.signal(signum, on_signal)
+
+    started = time.monotonic()
+    try:
+        try:
+            with state.locked():
+                ticket = state.register_locked(command, args.slots)
+        except StateUnavailable as exc:
+            if args.best_effort:
+                return best_effort(command, exc)
+            raise
+
+        while not acquired:
+            if received_signal is not None:
+                return 128 + received_signal
+            with state.locked():
+                acquired = state.try_acquire_locked(ticket)
+            if acquired:
+                break
+            elapsed = time.monotonic() - started
+            if args.timeout is not None and elapsed >= args.timeout:
+                eprint(f"timed out waiting for semaphore {args.name!r}")
+                return EX_TIMEOUT
+            remaining = args.poll
+            if args.timeout is not None:
+                remaining = min(remaining, max(0.0, args.timeout - elapsed))
+            wake.wait(remaining)
+            wake.clear()
+
+        child_env = os.environ.copy()
+        child_env["FAIRSEM_HELD_NAMES"] = ":".join(sorted(held | {args.name}))
+        gate_read, gate_write = os.pipe()
+        try:
+            child = subprocess.Popen(
+                [sys.executable, "-c", GATED_EXEC, str(gate_read), *command],
+                start_new_session=True,
+                env=child_env,
+                pass_fds=(gate_read,),
+            )
+        except OSError as exc:
+            os.close(gate_read)
+            os.close(gate_write)
+            eprint(f"cannot execute {command[0]!r}: {exc.strerror}")
+            return EX_EXEC
+        os.close(gate_read)
+        try:
+            with state.locked():
+                state.set_command_locked(ticket, child.pid)
+        except FairSemError:
+            # Never let a command escape admission accounting. If its durable
+            # identity cannot be recorded, close the gate and stop it before
+            # releasing the slot.
+            os.close(gate_write)
+            try:
+                os.killpg(child.pid, signal.SIGTERM)
+                child.wait(timeout=2)
+            except ProcessLookupError:
+                pass
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(child.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                child.wait()
+            raise
+        try:
+            os.write(gate_write, b"1")
+        except BrokenPipeError:
+            pass
+        finally:
+            os.close(gate_write)
+
+        while True:
+            try:
+                return_code = child.wait()
+                break
+            except InterruptedError:
+                continue
+        if return_code < 0:
+            return 128 - return_code
+        return return_code
+    finally:
+        for signum, handler in previous_handlers.items():
+            signal.signal(signum, handler)
+        if ticket is not None:
+            try:
+                with state.locked():
+                    state.release_locked(ticket)
+            except FairSemError as exc:
+                eprint(f"WARNING: cleanup failed; stale recovery will retry: {exc}")
+
+
+def status_command(args: argparse.Namespace) -> int:
+    validate_platform()
+    validate_name(args.name)
+    state = SemaphoreState(root_path(), args.name)
+    with state.locked():
+        snapshot, cleanup = state.snapshot_locked()
+    snapshot["cleanup"] = {
+        "removed_holders": cleanup.removed_holders,
+        "removed_waiters": cleanup.removed_waiters,
+    }
+    if args.json:
+        print(json.dumps(snapshot, sort_keys=True, separators=(",", ":")))
+        return 0
+    slots = "unconfigured" if snapshot["slots"] is None else str(snapshot["slots"])
+    print(
+        f"{snapshot['name']}: slots={slots} in_use={snapshot['in_use']} "
+        f"waiting={len(snapshot['waiters'])} available={snapshot['available']}"
+    )
+    for label in ("holders", "waiters"):
+        print(f"{label}:")
+        for record in snapshot[label]:
+            argv = record.get("argv") or []
+            command = shlex.join(str(part) for part in argv) if argv else "<launching>"
+            print(
+                f"  {record['ticket']} pid={record['pid']} command_pid={record['command_pid']} "
+                f"wait_ms={record['wait_ms']} -- {command}"
+            )
+    if cleanup.removed_holders or cleanup.removed_waiters:
+        print(
+            f"cleanup: removed {cleanup.removed_holders} stale holder(s), "
+            f"{cleanup.removed_waiters} stale waiter(s)"
+        )
     return 0
-  fi
-  return 1
-}
 
-release_locked() {
-  local ticket="$1"
-  local directory="$2"
-  rm -f -- "$directory/holders/$ticket" "$directory/waiters/$ticket"
-}
 
-status_locked() {
-  local directory="$1"
-  clean_stale_locked "$directory"
-  echo "holders:"
-  local file
-  for file in "$directory"/holders/*; do
-    [[ -e "$file" ]] || continue
-    printf '  %s  ' "$(basename "$file")"
-    command cat "$file"
-  done
-  echo "waiters:"
-  for file in $(find "$directory/waiters" -type f -maxdepth 1 -print 2>/dev/null | sort); do
-    printf '  %s  ' "$(basename "$file")"
-    command cat "$file"
-  done
-}
+def repair_command(args: argparse.Namespace) -> int:
+    validate_platform()
+    validate_name(args.name)
+    state = SemaphoreState(root_path(), args.name)
+    with state.locked():
+        moved = state.repair_locked()
+    for path in moved:
+        print(f"quarantined {path}")
+    print(f"repair complete: {len(moved)} corrupt record(s) quarantined")
+    return 0
 
-run_command() {
-  local name="default"
-  local slots="1"
-  while (($#)); do
-    case "$1" in
-      --name)
-        (($# >= 2)) || usage
-        name="$2"
-        shift 2
-        ;;
-      --slots)
-        (($# >= 2)) || usage
-        slots="$2"
-        shift 2
-        ;;
-      --)
-        shift
-        break
-        ;;
-      *) usage ;;
-    esac
-  done
-  (($#)) || usage
-  valid_name "$name" || die "invalid semaphore name"
-  [[ "$slots" =~ ^[1-9][0-9]*$ ]] || die "slots must be a positive integer"
-  command -v flock >/dev/null 2>&1 || die "flock is required"
 
-  local ticket command_text acquired
-  ticket="$(date +%s%N)-$$"
-  command_text="$(printf '%q ' "$@")"
-  with_lock "$name" register_locked "$ticket" "$command_text"
-  acquired=0
-  cleanup() {
-    with_lock "$name" release_locked "$ticket" || true
-  }
-  trap cleanup EXIT INT TERM
-  while (( acquired == 0 )); do
-    if with_lock "$name" try_acquire_locked "$ticket" "$slots"; then
-      acquired=1
-    else
-      sleep "$POLL_SECONDS"
-    fi
-  done
-  "$@"
-}
+class Parser(argparse.ArgumentParser):
+    def error(self, message: str) -> NoReturn:
+        self.print_usage(sys.stderr)
+        eprint(message)
+        raise SystemExit(EX_USAGE)
 
-status_command() {
-  local name="default"
-  while (($#)); do
-    case "$1" in
-      --name)
-        (($# >= 2)) || usage
-        name="$2"
-        shift 2
-        ;;
-      *) usage ;;
-    esac
-  done
-  valid_name "$name" || die "invalid semaphore name"
-  with_lock "$name" status_locked
-}
 
-main() {
-  (($#)) || usage
-  local action="$1"
-  shift
-  case "$action" in
-    run) run_command "$@" ;;
-    status) status_command "$@" ;;
-    *) usage ;;
-  esac
-}
+def build_parser() -> argparse.ArgumentParser:
+    parser = Parser(
+        prog="fairsem",
+        description="A fair, observable semaphore for commands sharing one Linux machine.",
+    )
+    parser.add_argument("--version", action="version", version=f"fairsem {VERSION}")
+    subparsers = parser.add_subparsers(dest="action", required=True)
 
-main "$@"
+    run = subparsers.add_parser("run", help="wait for a slot, then run a command")
+    run.add_argument("--name", default="default", help="semaphore name (default: default)")
+    run.add_argument("--slots", type=parse_positive_int, default=1, help="slot count (default: 1)")
+    run.add_argument("--timeout", type=parse_nonnegative_float, help="maximum seconds to wait")
+    run.add_argument(
+        "--poll",
+        type=parse_nonnegative_float,
+        default=0.05,
+        help="poll interval in seconds (default: 0.05)",
+    )
+    run.add_argument(
+        "--best-effort",
+        action="store_true",
+        help="run without admission only when secure state setup is unavailable",
+    )
+    run.add_argument("command", nargs=argparse.REMAINDER, metavar="-- COMMAND [ARG...]")
+
+    status = subparsers.add_parser("status", help="show holders, waiters, capacity, and stale cleanup")
+    status.add_argument("--name", default="default", help="semaphore name (default: default)")
+    status.add_argument("--json", action="store_true", help="emit stable compact JSON")
+
+    repair = subparsers.add_parser("repair", help="quarantine corrupt records after inspection")
+    repair.add_argument("--name", default="default", help="semaphore name (default: default)")
+    return parser
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    try:
+        if args.action == "run":
+            return run_command(args)
+        if args.action == "status":
+            return status_command(args)
+        if args.action == "repair":
+            return repair_command(args)
+        return EX_USAGE
+    except FairSemError as exc:
+        eprint(str(exc))
+        return exc.exit_code
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
