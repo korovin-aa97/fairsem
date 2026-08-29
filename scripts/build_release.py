@@ -9,8 +9,7 @@ import io
 import tarfile
 from pathlib import Path
 
-
-VERSION = "0.1.0"
+VERSION = "0.1.1"
 ROOT = Path(__file__).resolve().parents[1]
 DIST = ROOT / "dist"
 ARCHIVE = DIST / f"fairsem-v{VERSION}.tar.gz"
@@ -20,7 +19,7 @@ FILES = [
     "man/fairsem.1",
     "docs/CONTRACT.md",
     "docs/COMPETITORS.md",
-    "docs/RELEASE_NOTES_v0.1.0.md",
+    "docs/RELEASE_NOTES_v0.1.1.md",
     "README.md",
     "LICENSE",
     "CHANGELOG.md",
@@ -47,9 +46,10 @@ def build() -> None:
             info.uname = info.gname = "root"
             info.mode = 0o755 if relative in EXECUTABLES else 0o644
             archive.addfile(info, io.BytesIO(payload))
-    with ARCHIVE.open("wb") as raw:
-        with gzip.GzipFile(filename="", mode="wb", fileobj=raw, mtime=0) as compressed:
-            compressed.write(buffer.getvalue())
+    with ARCHIVE.open("wb") as raw, gzip.GzipFile(
+        filename="", mode="wb", fileobj=raw, mtime=0
+    ) as compressed:
+        compressed.write(buffer.getvalue())
     digest = hashlib.sha256(ARCHIVE.read_bytes()).hexdigest()
     (DIST / "SHA256SUMS").write_text(f"{digest}  {ARCHIVE.name}\n", encoding="ascii")
     print(ARCHIVE)

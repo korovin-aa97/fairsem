@@ -1,4 +1,4 @@
-.TH FAIRSEM 1 "2026-08-29" "fairsem 0.1.0" "User Commands"
+.TH FAIRSEM 1 "2026-08-30" "fairsem 0.1.1" "User Commands"
 .SH NAME
 fairsem \- fair, observable admission semaphore for local Linux commands
 .SH SYNOPSIS
@@ -30,7 +30,8 @@ Positive slot count. Default: 1. A conflicting count is rejected while a named
 semaphore is active and may replace its configuration when idle.
 .TP
 .B --timeout SECONDS
-Maximum monotonic time to wait. Exit 75 without launching on expiry.
+Maximum monotonic time to wait for the state lock and capacity. Exit 75 without
+launching on expiry.
 .TP
 .B --poll SECONDS
 Admission polling interval. Default: 0.05.
@@ -57,7 +58,8 @@ overtakes. Priorities are intentionally absent in 0.1.
 .SH SIGNALS AND CRASHES
 INT, TERM, and HUP are forwarded to the command's new process group. A command
 remains the recorded holder if its wrapper is killed, and dead/zombie records
-are removed by the next operation using PID plus /proc start-time identity.
+are removed by the next operation using boot ID, PID, and /proc start-time
+identity.
 .SH EXIT STATUS
 Command status is preserved. Pre-launch tool codes are: 64 usage, 65 config,
 69 unsupported platform, 70 corrupt state, 73 unsafe/unavailable state or lock,

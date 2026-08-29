@@ -8,7 +8,6 @@ import sys
 import time
 from pathlib import Path
 
-
 state_path = Path(sys.argv[1])
 duration = float(sys.argv[2])
 label = sys.argv[3]

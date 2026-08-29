@@ -43,7 +43,7 @@ From a release archive or source checkout:
 
 ```bash
 ./install.sh --prefix "$HOME/.local"
-fairsem --version
+"$HOME/.local/bin/fairsem" --version
 ```
 
 System-wide installation is explicit—download and inspect the archive first,
@@ -97,9 +97,10 @@ the oldest waiters needed to fill the available capacity are eligible; kernel
 scheduling can change their exact start order within that group. There is no
 priority feature in v0.1, so newer work cannot continually jump the queue.
 
-Timeouts use the monotonic clock. A waiter that times out or receives
+Timeouts—including state-lock waits—use the monotonic clock. A waiter that times out or receives
 `INT`/`TERM`/`HUP` removes itself. Records identify both PID and Linux process
-start time, preventing PID reuse from preserving stale capacity.
+start time and, for new records, boot ID, preventing PID reuse or reboot from
+preserving stale capacity.
 
 The complete state and failure rules are in [the contract](docs/CONTRACT.md).
 

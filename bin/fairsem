@@ -4,8 +4,10 @@
 from __future__ import annotations
 
 import argparse
+import errno
 import fcntl
 import json
+import math
 import os
 import re
 import secrets
@@ -15,17 +17,18 @@ import stat
 import subprocess
 import sys
 import tempfile
-import threading
 import time
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterator, NoReturn, Sequence
+from typing import Any, NoReturn
 
-
-VERSION = "0.1.0"
+VERSION = "0.1.1"
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 SCHEMA_VERSION = 1
+LOCK_ACQUIRE_SECONDS = 5.0
+LOCK_RETRY_SECONDS = 0.01
 
 EX_USAGE = 64
 EX_CONFIG = 65
@@ -36,7 +39,9 @@ EX_TIMEOUT = 75
 EX_EXEC = 126
 
 GATED_EXEC = """\
-import os, sys
+import os, signal, sys
+handled = {signal.SIGINT, signal.SIGTERM, signal.SIGHUP}
+signal.pthread_sigmask(signal.SIG_UNBLOCK, handled)
 gate = int(sys.argv[1])
 allowed = os.read(gate, 1)
 os.close(gate)
@@ -81,11 +86,23 @@ def linux_process_start(pid: int) -> str | None:
     return None if info is None else info[1]
 
 
+def linux_boot_id() -> str | None:
+    try:
+        value = Path("/proc/sys/kernel/random/boot_id").read_text(encoding="ascii").strip()
+    except OSError:
+        return None
+    return value or None
+
+
 def process_identity(pid: int) -> dict[str, Any] | None:
     started = linux_process_start(pid)
     if started is None:
         return None
-    return {"pid": pid, "start_ticks": started}
+    identity = {"pid": pid, "start_ticks": started}
+    boot_id = linux_boot_id()
+    if boot_id is not None:
+        identity["boot_id"] = boot_id
+    return identity
 
 
 def identity_alive(identity: Any) -> bool:
@@ -93,6 +110,7 @@ def identity_alive(identity: Any) -> bool:
         return False
     pid = identity.get("pid")
     started = identity.get("start_ticks")
+    recorded_boot_id = identity.get("boot_id")
     info = linux_process_info(pid) if isinstance(pid, int) and pid > 0 else None
     return (
         isinstance(pid, int)
@@ -101,6 +119,7 @@ def identity_alive(identity: Any) -> bool:
         and info is not None
         and info[0] != "Z"
         and info[1] == started
+        and (recorded_boot_id is None or linux_boot_id() == recorded_boot_id)
     )
 
 
@@ -110,6 +129,29 @@ def monotonic_ns() -> int:
 
 def wall_time() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def validate_parent_chain(path: Path) -> None:
+    """Reject replaceable or symlinked ancestors of a custom state root."""
+    current = path.parent
+    while True:
+        try:
+            details = current.lstat()
+        except FileNotFoundError:
+            current = current.parent
+            continue
+        except OSError as exc:
+            raise StateUnavailable(f"cannot inspect state parent {current}: {exc.strerror}", EX_CANTCREAT) from exc
+        if stat.S_ISLNK(details.st_mode) or not stat.S_ISDIR(details.st_mode):
+            raise StateUnavailable(f"state parent is not a real directory: {current}", EX_CANTCREAT)
+        mode = stat.S_IMODE(details.st_mode)
+        writable_by_others = bool(mode & 0o022)
+        sticky_owner = bool(mode & stat.S_ISVTX) and details.st_uid in {0, os.geteuid()}
+        if writable_by_others and not sticky_owner:
+            raise StateUnavailable(f"state parent is replaceable by another user: {current}", EX_CANTCREAT)
+        if current == current.parent:
+            return
+        current = current.parent
 
 
 def validate_secure_directory(path: Path, *, create: bool) -> None:
@@ -125,7 +167,7 @@ def validate_secure_directory(path: Path, *, create: bool) -> None:
         raise StateUnavailable(f"state path is not a real directory: {path}", EX_CANTCREAT)
     if details.st_uid != os.geteuid():
         raise StateUnavailable(f"state directory is not owned by uid {os.geteuid()}: {path}", EX_CANTCREAT)
-    if stat.S_IMODE(details.st_mode) & 0o077:
+    if stat.S_IMODE(details.st_mode) != 0o700:
         raise StateUnavailable(f"state directory permissions must be 0700: {path}", EX_CANTCREAT)
 
 
@@ -168,6 +210,10 @@ def valid_identity_shape(identity: Any) -> bool:
         and identity["pid"] > 0
         and isinstance(identity.get("start_ticks"), str)
         and identity["start_ticks"].isdigit()
+        and (
+            identity.get("boot_id") is None
+            or (isinstance(identity.get("boot_id"), str) and bool(identity["boot_id"]))
+        )
     )
 
 
@@ -210,12 +256,45 @@ class SemaphoreState:
         self.counter_path = self.directory / "counter"
 
     def prepare(self) -> None:
+        validate_parent_chain(self.root)
         validate_secure_directory(self.root, create=True)
         for directory in (self.directory, self.waiters, self.holders, self.quarantine):
             validate_secure_directory(directory, create=True)
 
+    def cleanup_interrupted_temps_locked(self) -> None:
+        candidates: list[Path] = []
+        for directory in (self.waiters, self.holders):
+            try:
+                candidates.extend(item for item in directory.iterdir() if item.name.startswith("."))
+            except OSError as exc:
+                raise FairSemError(f"cannot inspect interrupted state writes: {exc.strerror}", EX_STATE) from exc
+        try:
+            candidates.extend(
+                item
+                for item in self.directory.iterdir()
+                if item.name.startswith(".counter.") or item.name.startswith(".config.json.")
+            )
+        except OSError as exc:
+            raise FairSemError(f"cannot inspect interrupted state writes: {exc.strerror}", EX_STATE) from exc
+        for path in candidates:
+            try:
+                details = path.lstat()
+                if not (stat.S_ISREG(details.st_mode) or stat.S_ISLNK(details.st_mode)):
+                    raise FairSemError(f"unexpected interrupted-state entry: {path}", EX_STATE)
+                path.unlink()
+            except FileNotFoundError:
+                pass
+            except OSError as exc:
+                raise FairSemError(f"cannot remove interrupted state write {path}: {exc.strerror}", EX_STATE) from exc
+
     @contextmanager
-    def locked(self) -> Iterator[None]:
+    def locked(
+        self,
+        *,
+        deadline: float | None = None,
+        cancel_signal: Callable[[], int | None] | None = None,
+        allow_expired_attempt: bool = False,
+    ) -> Iterator[None]:
         self.prepare()
         flags = os.O_CREAT | os.O_RDWR
         if hasattr(os, "O_NOFOLLOW"):
@@ -228,11 +307,42 @@ class SemaphoreState:
                 os.close(fd)
                 fd = None
                 raise StateUnavailable(f"unsafe lock file: {self.lock_path}", EX_CANTCREAT)
-            if stat.S_IMODE(details.st_mode) & 0o077:
+            if stat.S_IMODE(details.st_mode) != 0o600:
                 os.close(fd)
                 fd = None
                 raise StateUnavailable(f"lock file permissions must be 0600: {self.lock_path}", EX_CANTCREAT)
-            fcntl.flock(fd, fcntl.LOCK_EX)
+            safety_deadline = time.monotonic() + LOCK_ACQUIRE_SECONDS
+            attempted = False
+            while True:
+                signum = cancel_signal() if cancel_signal is not None else None
+                if signum is not None:
+                    raise FairSemError("cancelled while waiting for the state lock", 128 + signum)
+                now = time.monotonic()
+                if deadline is not None and now >= deadline and not (allow_expired_attempt and not attempted):
+                    raise FairSemError("timed out waiting for the state lock", EX_TIMEOUT)
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except OSError as exc:
+                    if exc.errno not in (errno.EACCES, errno.EAGAIN):
+                        raise
+                attempted = True
+                now = time.monotonic()
+                if deadline is not None and now >= deadline:
+                    raise FairSemError("timed out waiting for the state lock", EX_TIMEOUT)
+                if now >= safety_deadline:
+                    raise StateUnavailable(
+                        f"timed out acquiring state lock after {LOCK_ACQUIRE_SECONDS:g}s: {self.lock_path}",
+                        EX_CANTCREAT,
+                    )
+                wake_at = min(safety_deadline, deadline) if deadline is not None else safety_deadline
+                time.sleep(min(LOCK_RETRY_SECONDS, max(0.0, wake_at - now)))
+            self.cleanup_interrupted_temps_locked()
+        except FairSemError:
+            if fd is not None:
+                os.close(fd)
+                fd = None
+            raise
         except OSError as exc:
             if fd is not None:
                 os.close(fd)
@@ -451,7 +561,7 @@ def parse_nonnegative_float(value: str) -> float:
         parsed = float(value)
     except ValueError as exc:
         raise argparse.ArgumentTypeError("must be a number") from exc
-    if parsed < 0 or parsed == float("inf") or parsed != parsed:
+    if parsed < 0 or not math.isfinite(parsed):
         raise argparse.ArgumentTypeError("must be a finite non-negative number")
     return parsed
 
@@ -478,16 +588,6 @@ def root_path() -> Path:
     return Path(f"/tmp/fairsem-{os.geteuid()}")
 
 
-def best_effort(command: Sequence[str], reason: FairSemError) -> int:
-    eprint(f"WARNING: semaphore unavailable; --best-effort is running without a slot: {reason}")
-    try:
-        completed = subprocess.run(list(command), check=False)
-    except OSError as exc:
-        eprint(f"cannot execute {command[0]!r}: {exc.strerror}")
-        return EX_EXEC
-    return completed.returncode if completed.returncode >= 0 else 128 - completed.returncode
-
-
 def run_command(args: argparse.Namespace) -> int:
     validate_platform()
     validate_name(args.name)
@@ -505,7 +605,8 @@ def run_command(args: argparse.Namespace) -> int:
     acquired = False
     child: subprocess.Popen[Any] | None = None
     received_signal: int | None = None
-    wake = threading.Event()
+    handled_signals = {signal.SIGINT, signal.SIGTERM, signal.SIGHUP}
+    previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, handled_signals)
 
     def on_signal(signum: int, _frame: Any) -> None:
         nonlocal received_signal
@@ -515,29 +616,74 @@ def run_command(args: argparse.Namespace) -> int:
                 os.killpg(child.pid, signum)
             except ProcessLookupError:
                 pass
-        wake.set()
 
-    previous_handlers: dict[int, Any] = {}
-    for signum in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
-        previous_handlers[signum] = signal.signal(signum, on_signal)
+    def spawn_tracked(
+        argv: Sequence[str], *, env: dict[str, str], pass_fds: tuple[int, ...] = ()
+    ) -> subprocess.Popen[Any]:
+        nonlocal child
+        spawned = subprocess.Popen(
+            list(argv),
+            start_new_session=True,
+            env=env,
+            pass_fds=pass_fds,
+        )
+        child = spawned
+        return spawned
+
+    def wait_for_child() -> int:
+        if child is None:
+            raise FairSemError("internal error: command process was not started", EX_STATE)
+        if received_signal is not None:
+            on_signal(received_signal, None)
+        while True:
+            return_code = child.poll()
+            if return_code is not None:
+                return return_code
+            received = signal.sigtimedwait(handled_signals, 0.05)
+            if received is not None:
+                on_signal(received.si_signo, None)
 
     started = time.monotonic()
+    deadline = started + args.timeout if args.timeout is not None else None
+    bypassed = False
+
+    def current_signal() -> int | None:
+        nonlocal received_signal
+        if received_signal is None:
+            received = signal.sigtimedwait(handled_signals, 0)
+            if received is not None:
+                on_signal(received.si_signo, None)
+        return received_signal
+
+    def wait_interruptibly(seconds: float) -> None:
+        wait_deadline = time.monotonic() + seconds
+        while received_signal is None:
+            remaining = wait_deadline - time.monotonic()
+            if remaining <= 0:
+                return
+            received = signal.sigtimedwait(handled_signals, min(remaining, 0.05))
+            if received is not None:
+                on_signal(received.si_signo, None)
+
     try:
         try:
-            with state.locked():
+            with state.locked(
+                deadline=deadline,
+                cancel_signal=current_signal,
+                allow_expired_attempt=True,
+            ):
                 ticket = state.register_locked(command, args.slots)
+                acquired = state.try_acquire_locked(ticket)
         except StateUnavailable as exc:
             if args.best_effort:
-                return best_effort(command, exc)
-            raise
+                eprint(f"WARNING: semaphore unavailable; --best-effort is running without a slot: {exc}")
+                bypassed = True
+            else:
+                raise
 
-        while not acquired:
+        while not acquired and not bypassed:
             if received_signal is not None:
                 return 128 + received_signal
-            with state.locked():
-                acquired = state.try_acquire_locked(ticket)
-            if acquired:
-                break
             elapsed = time.monotonic() - started
             if args.timeout is not None and elapsed >= args.timeout:
                 eprint(f"timed out waiting for semaphore {args.name!r}")
@@ -545,16 +691,21 @@ def run_command(args: argparse.Namespace) -> int:
             remaining = args.poll
             if args.timeout is not None:
                 remaining = min(remaining, max(0.0, args.timeout - elapsed))
-            wake.wait(remaining)
-            wake.clear()
+            wait_interruptibly(remaining)
+            with state.locked(deadline=deadline, cancel_signal=current_signal):
+                acquired = state.try_acquire_locked(ticket)
+
+        if received_signal is not None:
+            return 128 + received_signal
 
         child_env = os.environ.copy()
-        child_env["FAIRSEM_HELD_NAMES"] = ":".join(sorted(held | {args.name}))
+        if not bypassed:
+            child_env["FAIRSEM_HELD_NAMES"] = ":".join(sorted(held | {args.name}))
+
         gate_read, gate_write = os.pipe()
         try:
-            child = subprocess.Popen(
+            spawn_tracked(
                 [sys.executable, "-c", GATED_EXEC, str(gate_read), *command],
-                start_new_session=True,
                 env=child_env,
                 pass_fds=(gate_read,),
             )
@@ -564,26 +715,32 @@ def run_command(args: argparse.Namespace) -> int:
             eprint(f"cannot execute {command[0]!r}: {exc.strerror}")
             return EX_EXEC
         os.close(gate_read)
-        try:
-            with state.locked():
-                state.set_command_locked(ticket, child.pid)
-        except FairSemError:
-            # Never let a command escape admission accounting. If its durable
-            # identity cannot be recorded, close the gate and stop it before
-            # releasing the slot.
-            os.close(gate_write)
+        if received_signal is not None:
             try:
-                os.killpg(child.pid, signal.SIGTERM)
-                child.wait(timeout=2)
+                os.killpg(child.pid, received_signal)
             except ProcessLookupError:
                 pass
-            except subprocess.TimeoutExpired:
+        if not bypassed:
+            try:
+                with state.locked(cancel_signal=current_signal):
+                    state.set_command_locked(ticket, child.pid)
+            except FairSemError:
+                # Never let a command escape admission accounting. If its durable
+                # identity cannot be recorded, close the gate and stop it before
+                # releasing the slot.
+                os.close(gate_write)
                 try:
-                    os.killpg(child.pid, signal.SIGKILL)
+                    os.killpg(child.pid, signal.SIGTERM)
+                    child.wait(timeout=2)
                 except ProcessLookupError:
                     pass
-                child.wait()
-            raise
+                except subprocess.TimeoutExpired:
+                    try:
+                        os.killpg(child.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                    child.wait()
+                raise
         try:
             os.write(gate_write, b"1")
         except BrokenPipeError:
@@ -591,24 +748,18 @@ def run_command(args: argparse.Namespace) -> int:
         finally:
             os.close(gate_write)
 
-        while True:
-            try:
-                return_code = child.wait()
-                break
-            except InterruptedError:
-                continue
+        return_code = wait_for_child()
         if return_code < 0:
             return 128 - return_code
         return return_code
     finally:
-        for signum, handler in previous_handlers.items():
-            signal.signal(signum, handler)
         if ticket is not None:
             try:
-                with state.locked():
+                with state.locked(deadline=time.monotonic() + 0.25):
                     state.release_locked(ticket)
             except FairSemError as exc:
                 eprint(f"WARNING: cleanup failed; stale recovery will retry: {exc}")
+        signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
 
 
 def status_command(args: argparse.Namespace) -> int:

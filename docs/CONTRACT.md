@@ -42,8 +42,10 @@ the config only when the semaphore is idle.
 
 ## Process identity and stale cleanup
 
-Records contain PID and `/proc/PID/stat` start ticks. A PID is live only when
-both still match and its process is not a zombie. This handles PID reuse.
+New records contain the Linux boot ID plus PID and `/proc/PID/stat` start
+ticks. A PID is live only when the available identity fields still match and
+its process is not a zombie. This handles PID reuse and persistent custom state
+across reboots while remaining compatible with v0.1.0 records.
 
 - Waiting records track the FairSem wrapper.
 - A newly admitted record briefly tracks the wrapper while a child waits on a
@@ -63,8 +65,11 @@ spawn/accounting gap even for wrapper `SIGKILL`.
 ## Time, timeout, and cancellation
 
 Wait deadlines and displayed wait duration use `time.monotonic`; wall-clock
-changes do not extend or shorten timeout decisions. `--timeout 0` performs one
-immediate admission attempt. A timeout removes the ticket and exits `75`.
+changes do not extend or shorten timeout decisions. The deadline includes
+waiting for the state lock as well as waiting for capacity. `--timeout 0`
+performs one immediate lock/admission attempt. A timeout removes the ticket
+when possible and exits `75` without launching the command. State-lock waits
+without a user deadline fail closed after five seconds instead of hanging.
 
 `INT`, `TERM`, and `HUP` while waiting cancel and remove the waiter, returning
 `128 + signal`. While holding, they are forwarded to the command's new process
@@ -82,7 +87,8 @@ exit `65`.
 
 `--best-effort` applies only when secure state setup or locking is unavailable
 during initial registration. It prints `WARNING` to stderr and runs the command
-without admission. It never bypasses corrupt records or slot mismatch.
+without admission, while preserving signal forwarding and command exit status.
+It never bypasses corrupt records or slot mismatch.
 
 ## Status schema
 
