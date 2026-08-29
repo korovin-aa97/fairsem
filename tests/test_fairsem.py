@@ -64,7 +64,7 @@ class FairSemTests(unittest.TestCase):
     def test_version_help_and_usage_exit(self) -> None:
         version = self.run_cli("--version")
         self.assertEqual(version.returncode, 0)
-        self.assertEqual(version.stdout.strip(), "fairsem 0.1.1")
+        self.assertEqual(version.stdout.strip(), "fairsem 0.1.2")
         usage = self.run_cli("run")
         self.assertEqual(usage.returncode, 64)
 

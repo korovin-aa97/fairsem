@@ -1,0 +1,86 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640" role="img" aria-labelledby="title description">
+  <title id="title">FairSem keeps local jobs fair and machine load bounded</title>
+  <desc id="description">Many local jobs enter an oldest-first queue, then only two jobs run at the same time.</desc>
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#100b2f"/>
+      <stop offset="0.55" stop-color="#142343"/>
+      <stop offset="1" stop-color="#09363f"/>
+    </linearGradient>
+    <linearGradient id="brand" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#a78bfa"/>
+      <stop offset="0.55" stop-color="#5eead4"/>
+      <stop offset="1" stop-color="#bef264"/>
+    </linearGradient>
+    <linearGradient id="queue" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#332865"/>
+      <stop offset="1" stop-color="#173e59"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="150%">
+      <feDropShadow dx="0" dy="12" stdDeviation="16" flood-color="#030712" flood-opacity="0.35"/>
+    </filter>
+  </defs>
+
+  <rect width="1280" height="640" rx="28" fill="url(#background)"/>
+  <circle cx="1120" cy="40" r="238" fill="#7c3aed" opacity="0.12"/>
+  <circle cx="1220" cy="600" r="300" fill="#14b8a6" opacity="0.10"/>
+  <path d="M0 612 C230 530 340 650 566 574 C790 500 984 568 1280 450 V640 H0 Z" fill="#071b31" opacity="0.42"/>
+
+  <text x="72" y="96" fill="url(#brand)" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="24" font-weight="700">OPEN SOURCE · LINUX · ZERO TELEMETRY</text>
+  <text x="72" y="196" fill="#f8fafc" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="84" font-weight="800" letter-spacing="-3">FairSem</text>
+  <text x="72" y="248" fill="#d5deef" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="29" font-weight="600">Fair access to one busy machine.</text>
+  <text x="72" y="292" fill="#9fb1c9" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="23">Many local jobs line up. Only a safe number run at once.</text>
+
+  <g filter="url(#shadow)" font-family="Inter, ui-sans-serif, system-ui, sans-serif">
+    <g>
+      <rect x="72" y="352" width="238" height="172" rx="22" fill="#171c3f" stroke="#6556a8" stroke-width="2"/>
+      <text x="96" y="386" fill="#aebcce" font-size="16" font-weight="700" letter-spacing="1.4">MANY LOCAL JOBS</text>
+      <rect x="96" y="406" width="82" height="38" rx="12" fill="#35265f"/>
+      <circle cx="114" cy="425" r="5" fill="#a78bfa"/>
+      <text x="128" y="431" fill="#f4f1ff" font-size="17">tests</text>
+      <rect x="190" y="406" width="94" height="38" rx="12" fill="#213b58"/>
+      <circle cx="208" cy="425" r="5" fill="#67e8f9"/>
+      <text x="222" y="431" fill="#ecfeff" font-size="17">builds</text>
+      <rect x="96" y="458" width="96" height="38" rx="12" fill="#223d4d"/>
+      <circle cx="114" cy="477" r="5" fill="#5eead4"/>
+      <text x="128" y="483" fill="#ecfdf5" font-size="17">agents</text>
+      <rect x="204" y="458" width="80" height="38" rx="12" fill="#354229"/>
+      <circle cx="222" cy="477" r="5" fill="#bef264"/>
+      <text x="236" y="483" fill="#f7fee7" font-size="17">jobs</text>
+    </g>
+
+    <path d="M310 438 H364" fill="none" stroke="#7dd3fc" stroke-width="4" stroke-linecap="round"/>
+    <path d="M352 426 L366 438 L352 450" fill="none" stroke="#7dd3fc" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+
+    <g>
+      <rect x="368" y="336" width="298" height="204" rx="22" fill="url(#queue)" stroke="#8b7bd2" stroke-width="2"/>
+      <text x="394" y="374" fill="#d9d4ff" font-size="15" font-weight="700" letter-spacing="1">FAIR QUEUE · OLDEST FIRST</text>
+      <rect x="394" y="396" width="246" height="34" rx="10" fill="#4c3f86"/>
+      <text x="412" y="419" fill="#ffffff" font-size="16" font-weight="700">01</text>
+      <text x="458" y="419" fill="#f1efff" font-size="16">waiting longest</text>
+      <rect x="394" y="440" width="246" height="34" rx="10" fill="#2f4770"/>
+      <text x="412" y="463" fill="#cffafe" font-size="16" font-weight="700">02</text>
+      <text x="458" y="463" fill="#dff8ff" font-size="16">next in line</text>
+      <rect x="394" y="484" width="246" height="34" rx="10" fill="#203653"/>
+      <text x="412" y="507" fill="#9fb1c9" font-size="16" font-weight="700">03</text>
+      <text x="458" y="507" fill="#b9c5d6" font-size="16">waits safely</text>
+    </g>
+
+    <path d="M666 438 H720" fill="none" stroke="#a3e635" stroke-width="4" stroke-linecap="round"/>
+    <path d="M708 426 L722 438 L708 450" fill="none" stroke="#a3e635" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+
+    <g>
+      <rect x="724" y="336" width="484" height="204" rx="22" fill="#102f3b" stroke="#5eead4" stroke-width="2"/>
+      <text x="752" y="374" fill="#99f6e4" font-size="16" font-weight="700" letter-spacing="1.4">BOUNDED PARALLEL WORK</text>
+      <rect x="752" y="398" width="204" height="72" rx="16" fill="#174a52" stroke="#2dd4bf"/>
+      <circle cx="780" cy="434" r="9" fill="#5eead4"/>
+      <text x="802" y="441" fill="#f0fdfa" font-size="20" font-weight="700">job running</text>
+      <rect x="972" y="398" width="204" height="72" rx="16" fill="#314b35" stroke="#a3e635"/>
+      <circle cx="1000" cy="434" r="9" fill="#bef264"/>
+      <text x="1022" y="441" fill="#f7fee7" font-size="20" font-weight="700">job running</text>
+      <text x="752" y="507" fill="#d8f7ee" font-size="19" font-weight="700">2 slots · load stays under control</text>
+    </g>
+  </g>
+
+  <text x="72" y="592" fill="#8da6bc" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="19">Named queues · visible status · crash recovery · fail-closed by default</text>
+</svg>

@@ -6,6 +6,8 @@
 
 **A fair, observable semaphore for expensive commands sharing one Linux machine.**
 
+![Many local jobs enter FairSem's oldest-first queue, and only a safe number run at once.](docs/assets/social-preview.svg)
+
 FairSem gives independent processes a named FIFO admission queue. It caps
 concurrency, shows who is holding or waiting, recovers safely from dead
 wrappers, and fails closed when its state cannot be trusted.

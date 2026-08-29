@@ -34,16 +34,16 @@ jobs:
       - name: Build twice reproducibly
         run: |
           python3 scripts/build_release.py
-          cp dist/fairsem-v0.1.1.tar.gz /tmp/first.tar.gz
+          cp dist/fairsem-v0.1.2.tar.gz /tmp/first.tar.gz
           python3 scripts/build_release.py
-          cmp /tmp/first.tar.gz dist/fairsem-v0.1.1.tar.gz
+          cmp /tmp/first.tar.gz dist/fairsem-v0.1.2.tar.gz
           (cd dist && sha256sum --check SHA256SUMS)
           python3 scripts/check_release_metadata.py
       - name: Rehearse archive install and uninstall
         run: ./scripts/rehearse_release.sh
       - uses: actions/upload-artifact@v7
         with:
-          name: fairsem-v0.1.1-linux
+          name: fairsem-v0.1.2-linux
           path: |
-            dist/fairsem-v0.1.1.tar.gz
+            dist/fairsem-v0.1.2.tar.gz
             dist/SHA256SUMS

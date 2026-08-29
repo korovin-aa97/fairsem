@@ -3,8 +3,8 @@ class Fairsem < Formula
 
   desc "Fair, observable semaphore for local Linux commands"
   homepage "https://github.com/korovin-aa97/fairsem"
-  url "https://github.com/korovin-aa97/fairsem/releases/download/v0.1.1/fairsem-v0.1.1.tar.gz"
-  sha256 "7663b1d11c719c56bfe83e8fe3e4179790e86195069b4fffaec5e6b863646929"
+  url "https://github.com/korovin-aa97/fairsem/releases/download/v0.1.2/fairsem-v0.1.2.tar.gz"
+  sha256 "2d994fe3687f663d5902761525506c8d9ed2594b0cc1c3b4509908646cb27b75"
   license "MIT"
 
   depends_on :linux
@@ -17,7 +17,7 @@ class Fairsem < Formula
   end
 
   test do
-    assert_match "fairsem 0.1.1", shell_output("#{bin}/fairsem --version")
+    assert_match "fairsem 0.1.2", shell_output("#{bin}/fairsem --version")
     ENV["FAIRSEM_STATE_DIR"] = testpath/"state"
     system bin/"fairsem", "run", "--name", "homebrew", "--", "true"
     assert_match '"slots":1', shell_output("#{bin}/fairsem status --name homebrew --json")

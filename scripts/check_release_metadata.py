@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+import struct
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -27,7 +28,8 @@ def main() -> None:
     version = match.group(1)
     archive_name = f"fairsem-v{version}.tar.gz"
 
-    require(read("scripts/build_release.py"), f'VERSION = "{version}"', "build script")
+    build_script = read("scripts/build_release.py")
+    require(build_script, f'VERSION = "{version}"', "build script")
     require(read("scripts/rehearse_release.sh"), archive_name, "rehearsal script")
     require(read("man/fairsem.1"), f'"fairsem {version}"', "man page")
     formula = read("Formula/fairsem.rb")
@@ -36,6 +38,21 @@ def main() -> None:
     require(read("CHANGELOG.md"), f"## [{version}]", "changelog")
     if not (ROOT / f"docs/RELEASE_NOTES_v{version}.md").is_file():
         raise SystemExit(f"missing release notes for v{version}")
+
+    svg_relative = "docs/assets/social-preview.svg"
+    png_relative = "docs/assets/social-preview.png"
+    require(read("README.md"), f"]({svg_relative})", "README hero")
+    require(build_script, f'"{svg_relative}"', "build script")
+    require(build_script, f'"{png_relative}"', "build script")
+    svg = read(svg_relative)
+    require(svg, 'width="1280" height="640"', "social preview SVG dimensions")
+    require(svg, "<title", "social preview SVG accessibility")
+    require(svg, "<desc", "social preview SVG accessibility")
+    png = (ROOT / png_relative).read_bytes()
+    if not png.startswith(b"\x89PNG\r\n\x1a\n") or len(png) < 24:
+        raise SystemExit("social preview PNG is missing or invalid")
+    if struct.unpack(">II", png[16:24]) != (1280, 640):
+        raise SystemExit("social preview PNG must be exactly 1280x640")
 
     archive = ROOT / "dist" / archive_name
     sums = ROOT / "dist" / "SHA256SUMS"

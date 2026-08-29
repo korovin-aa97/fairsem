@@ -2,6 +2,13 @@
 
 All notable changes are documented here. FairSem follows Semantic Versioning.
 
+## [0.1.2] — 2026-08-30
+
+- Add an accessible illustrated README hero showing how many local jobs flow
+  through a fair queue into bounded parallel work.
+- Ship matching SVG and 1280×640 PNG assets for documentation and social
+  previews, with a palette that remains legible in light and dark contexts.
+
 ## [0.1.1] — 2026-08-30
 
 - Make wait deadlines cover state-lock contention, preventing commands from
@@ -26,3 +33,4 @@ All notable changes are documented here. FairSem follows Semantic Versioning.
 
 [0.1.0]: https://github.com/korovin-aa97/fairsem/releases/tag/v0.1.0
 [0.1.1]: https://github.com/korovin-aa97/fairsem/releases/tag/v0.1.1
+[0.1.2]: https://github.com/korovin-aa97/fairsem/releases/tag/v0.1.2

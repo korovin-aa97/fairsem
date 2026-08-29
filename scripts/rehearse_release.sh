@@ -3,13 +3,13 @@ set -eu
 CDPATH=''
 export CDPATH
 
-archive=${1:-dist/fairsem-v0.1.1.tar.gz}
+archive=${1:-dist/fairsem-v0.1.2.tar.gz}
 archive=$(cd -- "$(dirname -- "$archive")" && pwd)/$(basename -- "$archive")
 work=$(mktemp -d)
 trap 'rm -rf -- "$work"' EXIT HUP INT TERM
 
 tar -xzf "$archive" -C "$work"
-release_dir=$work/fairsem-v0.1.1
+release_dir=$work/fairsem-v0.1.2
 install_root=$work/install-root
 
 "$release_dir/install.sh" --prefix /usr/local --destdir "$install_root"
