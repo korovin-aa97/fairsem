@@ -40,4 +40,5 @@ Linux-only, one user, one machine. FairSem is not a distributed lock or
 resource limiter. Commands that daemonize or escape their process group are
 outside its lifecycle guarantee. Priorities are intentionally deferred.
 
-See [the contract](CONTRACT.md) for precise guarantees and exit codes.
+See [the contract](https://github.com/korovin-aa97/fairsem/blob/v0.1.0/docs/CONTRACT.md)
+for precise guarantees and exit codes.
