@@ -8,13 +8,17 @@ which is sufficient for downstream distro packages.
 
 [`Formula/fairsem.rb`](../Formula/fairsem.rb) is pinned to the exact v0.1.0
 release archive and checksum. After the public release exists, validate it on
-a Linuxbrew host:
+a Linuxbrew host. Current Homebrew audits formulae by tap-qualified name, so
+use a disposable local tap rather than auditing the file path directly:
 
 ```bash
-brew audit --strict Formula/fairsem.rb
-brew install --build-from-source ./Formula/fairsem.rb
-brew test fairsem
+brew tap-new local/fairsem-test
+cp Formula/fairsem.rb "$(brew --repository local/fairsem-test)/Formula/fairsem.rb"
+brew audit --strict local/fairsem-test/fairsem
+brew install --build-from-source local/fairsem-test/fairsem
+brew test local/fairsem-test/fairsem
 brew uninstall fairsem
+brew untap local/fairsem-test
 ```
 
 Only then copy the formula to an existing maintained tap or propose it to an

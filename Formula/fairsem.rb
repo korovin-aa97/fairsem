@@ -1,4 +1,6 @@
 class Fairsem < Formula
+  include Language::Python::Shebang
+
   desc "Fair, observable semaphore for local Linux commands"
   homepage "https://github.com/korovin-aa97/fairsem"
   url "https://github.com/korovin-aa97/fairsem/releases/download/v0.1.0/fairsem-v0.1.0.tar.gz"
@@ -9,6 +11,7 @@ class Fairsem < Formula
   depends_on "python@3.13"
 
   def install
+    rewrite_shebang detected_python_shebang, "bin/fairsem"
     bin.install "bin/fairsem"
     man1.install "man/fairsem.1"
   end
