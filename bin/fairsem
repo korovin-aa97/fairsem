@@ -1,0 +1,174 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+STATE_ROOT="${FAIRSEM_STATE_DIR:-/tmp/fairsem-${UID}}"
+POLL_SECONDS="${FAIRSEM_POLL_SECONDS:-1}"
+
+usage() {
+  command cat >&2 <<'EOF'
+Usage:
+  fairsem run [--name NAME] [--slots N] -- COMMAND [ARG...]
+  fairsem status [--name NAME]
+
+Draft Linux implementation. Requires flock.
+EOF
+  exit 64
+}
+
+die() {
+  echo "fairsem: $*" >&2
+  exit 65
+}
+
+valid_name() {
+  [[ "$1" =~ ^[A-Za-z0-9._-]+$ ]]
+}
+
+state_dir() {
+  printf '%s/%s' "$STATE_ROOT" "$1"
+}
+
+with_lock() {
+  local name="$1"
+  shift
+  local directory
+  directory="$(state_dir "$name")"
+  mkdir -p "$directory/waiters" "$directory/holders"
+  (
+    flock -x 9
+    "$@" "$directory"
+  ) 9>"$directory/lock"
+}
+
+clean_stale_locked() {
+  local directory="$1"
+  local file pid
+  for file in "$directory"/waiters/* "$directory"/holders/*; do
+    [[ -e "$file" ]] || continue
+    pid="$(cut -d' ' -f1 "$file" 2>/dev/null || true)"
+    if [[ -z "$pid" ]] || ! kill -0 "$pid" 2>/dev/null; then
+      rm -f -- "$file"
+    fi
+  done
+}
+
+register_locked() {
+  local ticket="$1"
+  local command_text="$2"
+  local directory="$3"
+  clean_stale_locked "$directory"
+  printf '%s %s\n' "$$" "$command_text" >"$directory/waiters/$ticket"
+}
+
+try_acquire_locked() {
+  local ticket="$1"
+  local slots="$2"
+  local directory="$3"
+  clean_stale_locked "$directory"
+  local holder_count first_waiter
+  holder_count="$(find "$directory/holders" -type f -maxdepth 1 2>/dev/null | wc -l | tr -d ' ')"
+  first_waiter="$(find "$directory/waiters" -type f -maxdepth 1 -print 2>/dev/null | sort | head -n 1)"
+  if (( holder_count < slots )) && [[ "$first_waiter" == "$directory/waiters/$ticket" ]]; then
+    mv "$directory/waiters/$ticket" "$directory/holders/$ticket"
+    return 0
+  fi
+  return 1
+}
+
+release_locked() {
+  local ticket="$1"
+  local directory="$2"
+  rm -f -- "$directory/holders/$ticket" "$directory/waiters/$ticket"
+}
+
+status_locked() {
+  local directory="$1"
+  clean_stale_locked "$directory"
+  echo "holders:"
+  local file
+  for file in "$directory"/holders/*; do
+    [[ -e "$file" ]] || continue
+    printf '  %s  ' "$(basename "$file")"
+    command cat "$file"
+  done
+  echo "waiters:"
+  for file in $(find "$directory/waiters" -type f -maxdepth 1 -print 2>/dev/null | sort); do
+    printf '  %s  ' "$(basename "$file")"
+    command cat "$file"
+  done
+}
+
+run_command() {
+  local name="default"
+  local slots="1"
+  while (($#)); do
+    case "$1" in
+      --name)
+        (($# >= 2)) || usage
+        name="$2"
+        shift 2
+        ;;
+      --slots)
+        (($# >= 2)) || usage
+        slots="$2"
+        shift 2
+        ;;
+      --)
+        shift
+        break
+        ;;
+      *) usage ;;
+    esac
+  done
+  (($#)) || usage
+  valid_name "$name" || die "invalid semaphore name"
+  [[ "$slots" =~ ^[1-9][0-9]*$ ]] || die "slots must be a positive integer"
+  command -v flock >/dev/null 2>&1 || die "flock is required"
+
+  local ticket command_text acquired
+  ticket="$(date +%s%N)-$$"
+  command_text="$(printf '%q ' "$@")"
+  with_lock "$name" register_locked "$ticket" "$command_text"
+  acquired=0
+  cleanup() {
+    with_lock "$name" release_locked "$ticket" || true
+  }
+  trap cleanup EXIT INT TERM
+  while (( acquired == 0 )); do
+    if with_lock "$name" try_acquire_locked "$ticket" "$slots"; then
+      acquired=1
+    else
+      sleep "$POLL_SECONDS"
+    fi
+  done
+  "$@"
+}
+
+status_command() {
+  local name="default"
+  while (($#)); do
+    case "$1" in
+      --name)
+        (($# >= 2)) || usage
+        name="$2"
+        shift 2
+        ;;
+      *) usage ;;
+    esac
+  done
+  valid_name "$name" || die "invalid semaphore name"
+  with_lock "$name" status_locked
+}
+
+main() {
+  (($#)) || usage
+  local action="$1"
+  shift
+  case "$action" in
+    run) run_command "$@" ;;
+    status) status_command "$@" ;;
+    *) usage ;;
+  esac
+}
+
+main "$@"
