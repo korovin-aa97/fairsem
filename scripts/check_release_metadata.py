@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import argparse
 import hashlib
 import re
 import struct
@@ -21,6 +22,18 @@ def require(text: str, expected: str, surface: str) -> None:
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Check FairSem version, archive, and published release metadata."
+    )
+    parser.add_argument(
+        "--skip-published-formula-checksum",
+        action="store_true",
+        help=(
+            "validate the candidate archive without requiring it to match the "
+            "already-published Homebrew formula"
+        ),
+    )
+    args = parser.parse_args()
     binary = read("bin/fairsem")
     match = re.search(r'^VERSION = "([0-9]+\.[0-9]+\.[0-9]+)"$', binary, re.MULTILINE)
     if match is None:
@@ -61,7 +74,8 @@ def main() -> None:
         expected_line = f"{digest}  {archive_name}\n"
         if sums.read_text(encoding="ascii") != expected_line:
             raise SystemExit("SHA256SUMS does not match the built archive")
-        require(formula, f'sha256 "{digest}"', "Homebrew formula checksum")
+        if not args.skip_published_formula_checksum:
+            require(formula, f'sha256 "{digest}"', "Homebrew formula checksum")
 
     print(f"release metadata is consistent for v{version}")
 

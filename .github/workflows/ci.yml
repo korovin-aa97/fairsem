@@ -38,7 +38,11 @@ jobs:
           python3 scripts/build_release.py
           cmp /tmp/first.tar.gz dist/fairsem-v0.1.3.tar.gz
           (cd dist && sha256sum --check SHA256SUMS)
-          python3 scripts/check_release_metadata.py
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            python3 scripts/check_release_metadata.py
+          else
+            python3 scripts/check_release_metadata.py --skip-published-formula-checksum
+          fi
       - name: Rehearse archive install and uninstall
         run: ./scripts/rehearse_release.sh
       - uses: actions/upload-artifact@v7
