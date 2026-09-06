@@ -11,7 +11,7 @@ test-containers:
 
 lint:
 	python3 -m py_compile bin/fairsem tests/test_fairsem.py tests/helpers/*.py scripts/*.py
-	shellcheck install.sh uninstall.sh scripts/rehearse_release.sh
+	shellcheck install.sh uninstall.sh scripts/rehearse_release.sh scripts/demo_recording.sh
 
 release:
 	python3 scripts/build_release.py

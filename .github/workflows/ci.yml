@@ -30,7 +30,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Shellcheck
-        run: shellcheck install.sh uninstall.sh scripts/rehearse_release.sh
+        run: shellcheck install.sh uninstall.sh scripts/rehearse_release.sh scripts/demo_recording.sh
       - name: Build twice reproducibly
         run: |
           python3 scripts/build_release.py

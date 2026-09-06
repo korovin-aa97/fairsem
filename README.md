@@ -4,7 +4,16 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Release](https://img.shields.io/github/v/release/korovin-aa97/fairsem)](https://github.com/korovin-aa97/fairsem/releases)
 
-**A fair, observable semaphore for expensive commands sharing one Linux machine.**
+## Stop one noisy job from starving the rest
+
+**FairSem puts unrelated Linux commands into one visible, oldest-first queue and
+lets only a safe number run at once—without a daemon or task scheduler.**
+
+[Run the 10-second demo](#ten-second-demo) ·
+[Read the safety contract](docs/CONTRACT.md)
+
+> **Scope:** Linux with `/proc`, Python 3.10+, one user, and one machine.
+> FairSem controls admission; it does not limit CPU, RAM, or I/O.
 
 ![Many local jobs enter FairSem's oldest-first queue, and only a safe number run at once.](docs/assets/social-preview.svg)
 
@@ -26,6 +35,7 @@ export PATH="$HOME/.local/bin:$PATH"
 for job in 1 2 3 4 5; do
   fairsem run --name demo --slots 2 -- \
     sh -c 'echo "start job $1"; sleep 2; echo "done  job $1"' _ "$job" &
+  sleep 0.1
 done
 
 fairsem status --name demo
@@ -35,6 +45,12 @@ wait
 At most two commands run together. With one slot, commands start in ticket
 order. With multiple slots, only the oldest currently eligible tickets may
 start.
+
+While all five jobs are active, the first status line is:
+
+```text
+demo: slots=2 in_use=2 waiting=3 available=0
+```
 
 ## Install
 
@@ -164,6 +180,15 @@ propagation.
 
 See [known alternatives](docs/COMPETITORS.md), the [changelog](CHANGELOG.md),
 the [packaging notes](docs/PACKAGING.md), and [contributing guide](CONTRIBUTING.md).
+
+## Why not `flock`?
+
+Use `flock` when one exclusive lock is enough. FairSem is for the next step:
+multiple slots, oldest-first eligibility, visible holders and waiters, wait
+timeouts, and process-identity-based stale cleanup. It stays a synchronous
+command wrapper rather than becoming a daemon or task manager.
+
+[Open a question or share which jobs you would limit](https://github.com/korovin-aa97/fairsem/issues/new/choose).
 
 Built from operating a mixed Claude/Codex production fleet. This repository is
 the generic admission primitive only; it contains no private orchestration.

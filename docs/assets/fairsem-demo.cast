@@ -1,0 +1,11 @@
+{"version":2,"width":132,"height":32,"timestamp":1788170076,"command":"docker run --rm -v \"$PWD:/work\" -w /work python:3.10-slim sh scripts/demo_recording.sh","title":"FairSem: five jobs, two slots","env":{"SHELL":"/bin/zsh"}}
+[0.568727, "o", "\u001bc$ # Five jobs compete for two safe slots.\r\n$ for job in 1 2 3 4 5; do fairsem run --name demo --slots 2 -- COMMAND & done\r\n\r\n"]
+[1.225451, "o", "$ fairsem status --name demo\r\n"]
+[1.269985, "o", "demo: slots=2 in_use=2 waiting=3 available=0\r\nholders:\r\n  00000000000000000001-914faeb3f5a6 pid=8 command_pid=11 wait_ms=438 -- sh -c 'sleep \"$1\"' job-1 3\r\n  00000000000000000002-0596c5733c99 pid=12 command_pid=17 wait_ms=371 -- sh -c 'sleep \"$1\"' job-2 3\r\nwaiters:\r\n  00000000000000000003-00c2f51558b7 pid=21 command_pid=None wait_ms=251 -- sh -c 'sleep \"$1\"' job-3 3\r\n  00000000000000000004-b5998ce59b0b pid=24 command_pid=None wait_ms=185 -- sh -c 'sleep \"$1\"' job-4 3\r\n  00000000000000000005-90103d1ebdd9 pid=30 command_pid=None wait_ms=65 -- sh -c 'sleep \"$1\"' job-5 3\r\n"]
+[4.380715, "o", "\r\n$ # The oldest waiting group takes the freed slots.\r\n"]
+[4.451828, "o", "demo: slots=2 in_use=2 waiting=1 available=0\r\nholders:\r\n  00000000000000000003-00c2f51558b7 pid=21 command_pid=35 wait_ms=3432 -- sh -c 'sleep \"$1\"' job-3 3\r\n  00000000000000000004-b5998ce59b0b pid=24 command_pid=37 wait_ms=3366 -- sh -c 'sleep \"$1\"' job-4 3\r\nwaiters:\r\n  00000000000000000005-90103d1ebdd9 pid=30 command_pid=None wait_ms=3246 -- sh -c 'sleep \"$1\"' job-5 3\r\n"]
+[7.560627, "o", "\r\n$ # The last waiter runs; capacity never exceeds two.\r\n"]
+[7.619228, "o", "demo: slots=2 in_use=1 waiting=0 available=1\r\nholders:\r\n  00000000000000000005-90103d1ebdd9 pid=30 command_pid=41 wait_ms=6414 -- sh -c 'sleep \"$1\"' job-5 3\r\nwaiters:\r\n"]
+[10.044417, "o", "\r\n$ # Queue drained.\r\n"]
+[10.099636, "o", "demo: slots=2 in_use=0 waiting=0 available=2\r\nholders:\r\nwaiters:\r\n"]
+[10.214457, "x", "0"]
