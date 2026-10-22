@@ -107,6 +107,35 @@ The first active caller defines the slot count for a name. A different count
 is rejected while that semaphore has holders or waiters; it may be changed
 once idle.
 
+### Summarize status with `jq`
+
+For a compact operator view of the [demo](#ten-second-demo), select the name,
+capacity, holder count, and waiter count from the stable
+[JSON status schema](docs/CONTRACT.md#status-schema):
+
+```bash
+fairsem status --name demo --json |
+  jq -r '"\(.name) capacity=\(.slots // "unconfigured") holders=\(.in_use) waiters=\(.waiters | length)"'
+```
+
+A configured two-slot semaphore with no work left prints:
+
+```text
+demo capacity=2 holders=0 waiters=0
+```
+
+While two jobs hold those slots and three more are queued, the same command
+prints:
+
+```text
+demo capacity=2 holders=2 waiters=3
+```
+
+These are snapshots; counts can change between calls. An unseen name has
+`slots: null`, displayed as `capacity=unconfigured`, rather than zero capacity.
+The query uses only the contract's `name`, `slots`, `in_use`, and `waiters`
+fields, without printing command arguments.
+
 ## What “fair” means
 
 Tickets are assigned under one kernel lock and sorted by a persistent counter.
